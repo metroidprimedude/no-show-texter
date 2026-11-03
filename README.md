@@ -35,4 +35,4 @@ The header badge switches to "SMS: live to demo phone". Inbound replies are stil
 
 ## Stack
 
-Next.js (App Router), React, plain CSS. No database: all state lives in the page. Deploy by importing the repo into Vercel.
+Next.js (App Router), React, plain CSS with light and dark themes. Fonts: Instrument Serif, Geist, Geist Mono via `next/font`. No database: demo logic lives in `app/engine.js`, UI in `app/page.js`. Deploy by importing the repo into Vercel.

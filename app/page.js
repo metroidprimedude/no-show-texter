@@ -1,184 +1,30 @@
 "use client";
 
 import { useEffect, useReducer, useRef, useState } from "react";
+import { CLINICS, fmt$, init, reducer } from "./engine";
 
-// ---------- Demo data ----------
-const TIMES = ["8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"];
+// ---------- Small helpers ----------
+const initials = (name) => name.replace(/\(.*\)/, "").trim().split(/\s+/).map((p) => p[0]).slice(0, 2).join("");
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
-const CLINICS = {
-  dental: {
-    label: "Dental",
-    name: "Riverbend Family Dental",
-    value: 325,
-    room: "Op",
-    services: ["Cleaning", "Crown prep", "Filling", "Exam + X-rays", "Root canal", "Cleaning", "Filling", "Crown seat"],
-    patients: ["Dana R.", "Marcus L.", "Priya S.", "Tom W.", "Grace H.", "Luis M.", "Aisha K.", "Ben C."],
-    waitlist: [
-      { name: "Maria Gonzalez", phone: "(916) 555-0142", note: "Any time, 15 min away" },
-      { name: "James Chen", phone: "(916) 555-0187", note: "Mornings, overdue cleaning" },
-      { name: "Keisha Brown", phone: "(530) 555-0123", note: "Afternoons" },
-      { name: "Ryan O'Neil", phone: "(916) 555-0166", note: "Any time" },
-      { name: "Sofia Patel", phone: "(916) 555-0199", note: "Lunch hour" },
-      { name: "Derek Nguyen", phone: "(530) 555-0110", note: "After 1 PM" },
-    ],
-  },
-  pt: {
-    label: "Physical therapy",
-    name: "Northgate Physical Therapy",
-    value: 140,
-    room: "Table",
-    services: ["Post-op knee", "Shoulder eval", "Low back rehab", "ACL rehab", "Gait training", "Rotator cuff", "Ankle sprain", "Dry needling"],
-    patients: ["Kim T.", "Joe P.", "Angela F.", "Raj D.", "Steve B.", "Nora Q.", "Will A.", "Hana Y."],
-    waitlist: [
-      { name: "Carlos Rivera", phone: "(916) 555-0131", note: "Post-op, wants extra visits" },
-      { name: "Emily Park", phone: "(916) 555-0158", note: "Mornings" },
-      { name: "Andre Wilson", phone: "(530) 555-0177", note: "Any time" },
-      { name: "Lauren Kelly", phone: "(916) 555-0104", note: "After work" },
-      { name: "Hector Ruiz", phone: "(916) 555-0193", note: "Any time" },
-      { name: "Mei Lin", phone: "(530) 555-0145", note: "Lunch hour" },
-    ],
-  },
-  vet: {
-    label: "Veterinary",
-    name: "Fieldstone Veterinary",
-    value: 210,
-    room: "Exam",
-    services: ["Annual exam", "Dental cleaning", "Vaccines", "Ear infection", "Senior wellness", "Spay consult", "Skin allergy", "Limping"],
-    patients: ["Biscuit (dog)", "Luna (cat)", "Max (dog)", "Pepper (cat)", "Rocky (dog)", "Mochi (cat)", "Duke (dog)", "Olive (dog)"],
-    waitlist: [
-      { name: "Jenna Morales (Bailey, dog)", phone: "(916) 555-0128", note: "Itchy, wants in sooner" },
-      { name: "Chris Adams (Simba, cat)", phone: "(916) 555-0171", note: "Any time" },
-      { name: "Tasha Green (Coco, dog)", phone: "(530) 555-0136", note: "Afternoons" },
-      { name: "Paul Ito (Ziggy, cat)", phone: "(916) 555-0115", note: "Mornings" },
-      { name: "Rosa Vega (Bruno, dog)", phone: "(916) 555-0182", note: "Any time" },
-      { name: "Sam Hill (Juniper, dog)", phone: "(530) 555-0150", note: "After 2 PM" },
-    ],
-  },
+const PATHS = {
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  x: "M6 6l12 12M18 6L6 18",
+  msg: "M4 6.5A2.5 2.5 0 016.5 4h11A2.5 2.5 0 0120 6.5v7a2.5 2.5 0 01-2.5 2.5H10l-4.5 4v-4A2.5 2.5 0 014 13.5z",
+  bolt: "M13 3L5 13.5h6L10 21l8-10.5h-6z",
+  user: "M12 12a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0",
+  chair: "M7 4v8h10M7 12v8M17 12v8M5 12h14",
+  back: "M15 5l-7 7 7 7",
+  reset: "M4 12a8 8 0 1 0 2.3-5.6M4 4v4.5h4.5",
 };
-
-const first = (name) => name.split(" ")[0];
-const fmt$ = (n) => "$" + Math.round(n).toLocaleString("en-US");
-let uid = 0;
-const id = () => ++uid;
-
-// ---------- State machine ----------
-function init(clinicKey) {
-  const c = CLINICS[clinicKey];
-  return {
-    clinicKey,
-    slots: TIMES.map((time, i) => ({
-      id: i, time, room: `${c.room} ${(i % 3) + 1}`, patient: c.patients[i], service: c.services[i], status: "booked",
-    })),
-    waitlist: c.waitlist.map((w, i) => ({ ...w, id: i, status: "waiting" })),
-    messages: [],
-    log: [],
-    recovered: 0,
-    refills: 0,
-    fillTimes: [],
-    round: null,
-    phoneId: null,
-  };
+function Icon({ name, size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={PATHS[name]} />
+    </svg>
+  );
 }
 
-function offerTo(s, members, now) {
-  const c = CLINICS[s.clinicKey];
-  const slot = s.slots.find((x) => x.id === s.round.slotId);
-  const ids = members.map((m) => m.id);
-  return {
-    ...s,
-    slots: s.slots.map((x) => (x.id === slot.id ? { ...x, status: "texting" } : x)),
-    waitlist: s.waitlist.map((w) => (ids.includes(w.id) ? { ...w, status: "texted" } : w)),
-    messages: [
-      ...s.messages,
-      ...members.map((m) => ({
-        id: id(), memberId: m.id, dir: "out", t: now,
-        text: `Hi ${first(m.name)}, ${c.name} just had a ${slot.time} opening today (${slot.service}). Reply YES to claim it. First reply gets it.`,
-      })),
-    ],
-    log: [{ id: id(), t: now, text: `Texted ${members.length} on the short-notice list for ${slot.time}` }, ...s.log],
-    round: { ...s.round, texted: [...s.round.texted, ...ids] },
-    phoneId: ids[0],
-  };
-}
-
-function reducer(s, a) {
-  switch (a.type) {
-    case "RESET":
-      return init(a.clinicKey);
-
-    case "CANCEL": {
-      if (s.round) return s;
-      const slot = s.slots.find((x) => x.id === a.slotId);
-      if (!slot || slot.status !== "booked") return s;
-      return {
-        ...s,
-        slots: s.slots.map((x) => (x.id === slot.id ? { ...x, status: "open", cancelled: x.patient } : x)),
-        log: [{ id: id(), t: a.now, kind: "bad", text: `${slot.patient} cancelled ${slot.time} ${slot.service}. ${fmt$(a.value)} at risk` }, ...s.log],
-        round: { slotId: slot.id, value: a.value, texted: [], startedAt: a.now },
-      };
-    }
-
-    case "OFFER": {
-      if (!s.round || s.round.texted.length) return s;
-      const batch = s.waitlist.filter((w) => w.status === "waiting").slice(0, 3);
-      if (!batch.length) {
-        return { ...s, round: null, log: [{ id: id(), t: a.now, kind: "bad", text: "Waitlist empty. Slot stays open." }, ...s.log] };
-      }
-      return offerTo(s, batch, a.now);
-    }
-
-    case "REPLY": {
-      const m = s.waitlist.find((w) => w.id === a.memberId);
-      if (!s.round || !m || m.status !== "texted") return s;
-      const c = CLINICS[s.clinicKey];
-      const slot = s.slots.find((x) => x.id === s.round.slotId);
-      const messages = [...s.messages, { id: id(), memberId: m.id, dir: "in", t: a.now, text: a.yes ? "YES" : "No thanks" }];
-
-      if (!a.yes) {
-        let next = {
-          ...s, messages,
-          waitlist: s.waitlist.map((w) => (w.id === m.id ? { ...w, status: "declined" } : w)),
-          log: [{ id: id(), t: a.now, text: `${m.name} passed` }, ...s.log],
-        };
-        const stillOpen = next.waitlist.find((w) => s.round.texted.includes(w.id) && w.status === "texted");
-        if (stillOpen) next = { ...next, phoneId: stillOpen.id };
-        else {
-          const more = next.waitlist.filter((w) => w.status === "waiting").slice(0, 1);
-          if (more.length) next = offerTo(next, more, a.now);
-          else next = { ...next, round: null, log: [{ id: id(), t: a.now, kind: "bad", text: "No takers. Slot stays open." }, ...next.log] };
-        }
-        return next;
-      }
-
-      const others = s.waitlist.filter((w) => w.id !== m.id && w.status === "texted");
-      const secs = Math.max(1, Math.round((a.now - s.round.startedAt) / 1000));
-      return {
-        ...s,
-        slots: s.slots.map((x) => (x.id === slot.id ? { ...x, status: "filled", patient: m.name } : x)),
-        waitlist: s.waitlist.map((w) =>
-          w.id === m.id ? { ...w, status: "claimed" } : others.some((o) => o.id === w.id) ? { ...w, status: "waiting" } : w
-        ),
-        messages: [
-          ...messages,
-          { id: id(), memberId: m.id, dir: "out", t: a.now, text: `You're booked: ${slot.time} today at ${c.name}. Reply C to cancel. See you soon.` },
-          ...others.map((o) => ({
-            id: id(), memberId: o.id, dir: "out", t: a.now,
-            text: `Thanks ${first(o.name)}, that ${slot.time} slot was just claimed. You're still at the top of our short-notice list.`,
-          })),
-        ],
-        log: [{ id: id(), t: a.now, kind: "good", text: `${m.name} claimed ${slot.time}. Chair refilled in ${secs}s. +${fmt$(s.round.value)}` }, ...s.log],
-        recovered: s.recovered + s.round.value,
-        refills: s.refills + 1,
-        fillTimes: [...s.fillTimes, secs],
-        round: null,
-      };
-    }
-    default:
-      return s;
-  }
-}
-
-// ---------- UI pieces ----------
 function Ticker({ value }) {
   const [shown, setShown] = useState(value);
   const from = useRef(value);
@@ -187,8 +33,8 @@ function Ticker({ value }) {
     const a = from.current;
     let raf;
     const step = (t) => {
-      const p = Math.min(1, (t - start) / 1200);
-      const v = a + (value - a) * (1 - Math.pow(1 - p, 3));
+      const p = Math.min(1, (t - start) / 1400);
+      const v = a + (value - a) * (1 - Math.pow(1 - p, 4));
       setShown(v);
       from.current = v;
       if (p < 1) raf = requestAnimationFrame(step);
@@ -199,34 +45,116 @@ function Ticker({ value }) {
   return <>{fmt$(shown)}</>;
 }
 
-function Phone({ member, messages, onReply }) {
-  const endRef = useRef(null);
+function Sparkline({ points }) {
+  const w = 220, h = 44;
+  const pts = points.length > 1 ? points : [0, 0];
+  const max = Math.max(...pts, 1);
+  const xy = pts.map((v, i) => [(i / (pts.length - 1)) * w, h - 4 - (v / max) * (h - 10)]);
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return (
+    <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+      <defs>
+        <linearGradient id="sg" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stopColor="var(--lime)" stopOpacity=".35" />
+          <stop offset="1" stopColor="var(--lime)" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={`${line} L${w},${h} L0,${h} Z`} fill="url(#sg)" />
+      <path d={line} fill="none" stroke="var(--lime)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// ---------- Refill pipeline ----------
+function Pipeline({ s, elapsed }) {
+  const slot = s.round && s.slots.find((x) => x.id === s.round.slotId);
+  const texted = s.round?.texted.length || 0;
+  const stage = !s.round ? (s.refills ? 5 : 0) : texted ? 3 : 1;
+  const steps = [
+    { icon: "x", title: "Cancellation", sub: slot ? `${slot.time} · ${slot.cancelled}` : "Watching the schedule" },
+    { icon: "msg", title: "Waitlist texted", sub: texted ? `${texted} patient${texted > 1 ? "s" : ""} offered` : "Best matches first" },
+    { icon: "user", title: "Patient claims", sub: stage === 3 ? "Waiting for first YES" : "First YES wins" },
+    { icon: "chair", title: "Chair refilled", sub: s.refills ? `${s.refills} today` : "Booked and confirmed" },
+  ];
+  return (
+    <section className="pipeline" aria-label="Refill pipeline">
+      {steps.map((st, i) => {
+        const n = i + 1;
+        const state = n < stage ? "done" : n === stage ? "active" : "";
+        return (
+          <div key={st.title} className={`step ${state}`}>
+            <div className="step-icon"><Icon name={state === "done" ? "check" : st.icon} size={15} /></div>
+            <div className="step-text">
+              <div className="step-title">{st.title}</div>
+              <div className="step-sub">{st.sub}</div>
+            </div>
+          </div>
+        );
+      })}
+      <div className={`timer ${s.round ? "on" : ""}`}>
+        <span className="dot" />
+        {s.round ? `00:${String(elapsed).padStart(2, "0")}` : "Idle"}
+      </div>
+    </section>
+  );
+}
+
+// ---------- Patient phone ----------
+function Phone({ clinic, member, messages, typing, onReply }) {
+  const threadRef = useRef(null);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "nearest" });
-  }, [messages.length]);
+    const el = threadRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages.length, typing]);
   const canReply = member?.status === "texted";
   return (
-    <div className="phone">
-      <div className="phone-notch" />
-      <div className="phone-head">
-        <div className="avatar">{member ? member.name[0] : "?"}</div>
-        <div>
-          <div className="phone-name">{member ? member.name : "Patient phone"}</div>
-          <div className="muted small">{member ? member.phone : "Waiting for a cancellation"}</div>
+    <div className="phone-wrap">
+      <div className="phone-label">{member ? `${member.name.split(" (")[0]}'s phone` : "Patient's phone"}</div>
+      <div className="phone">
+        <div className="screen">
+          <div className="status-bar"><span>9:41</span><span className="island" /><span className="sig">5G</span></div>
+          <div className="msg-head">
+            <span className="back"><Icon name="back" size={18} /></span>
+            <div className="msg-contact">
+              <div className="msg-avatar">{initials(clinic.name)}</div>
+              <div className="msg-name">{clinic.name}</div>
+            </div>
+          </div>
+          <div className="thread" ref={threadRef}>
+            {!member ? (
+              <div className="empty">
+                <Icon name="msg" size={28} />
+                <p>No messages yet.<br />Trigger a cancellation to send the first offer.</p>
+              </div>
+            ) : (
+              <div className="stamp">Text Message · Today</div>
+            )}
+            {messages.map((m) => (
+              <div key={m.id} className={`bubble ${m.dir}`}>{m.text}</div>
+            ))}
+          </div>
+          <div className="compose">
+            <div className="chips">
+              <button className="chip yes" disabled={!canReply} onClick={() => onReply(member.id, true)}>YES</button>
+              <button className="chip" disabled={!canReply} onClick={() => onReply(member.id, false)}>No thanks</button>
+            </div>
+            <div className={`field-fake ${typing ? "typing" : ""}`}>{typing ? <>YES<span className="caret" /></> : "Text Message"}</div>
+          </div>
         </div>
       </div>
-      <div className="thread">
-        {!member && <p className="muted small center">Cancel an appointment to see the text go out.</p>}
-        {messages.map((m) => (
-          <div key={m.id} className={`bubble ${m.dir}`}>{m.text}</div>
-        ))}
-        <div ref={endRef} />
-      </div>
-      <div className="phone-actions">
-        <button className="btn primary" disabled={!canReply} onClick={() => onReply(member.id, true)}>Reply YES</button>
-        <button className="btn" disabled={!canReply} onClick={() => onReply(member.id, false)}>No thanks</button>
-      </div>
     </div>
+  );
+}
+
+// ---------- ROI ----------
+function Slider({ label, value, min, max, step = 1, format, onChange }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  return (
+    <label className="slider">
+      <div className="slider-top"><span>{label}</span><b>{format(value)}</b></div>
+      <input type="range" min={min} max={max} step={step} value={value} style={{ "--p": `${pct}%` }}
+        onChange={(e) => onChange(Number(e.target.value))} />
+    </label>
   );
 }
 
@@ -236,39 +164,44 @@ function Roi({ inputs, setInputs }) {
   const lost = lostAppts * value;
   const recovered = lost * (fill / 100);
   const cost = price * 12;
-  const field = (key, label, suffix, step = 1) => (
-    <label className="field">
-      <span>{label}</span>
-      <div className="input-wrap">
-        {suffix === "$" && <i>$</i>}
-        <input type="number" min="0" step={step} value={inputs[key]}
-          onChange={(e) => setInputs({ ...inputs, [key]: Number(e.target.value) || 0 })} />
-        {suffix && suffix !== "$" && <i>{suffix}</i>}
-      </div>
-    </label>
-  );
+  const set = (k) => (v) => setInputs({ ...inputs, [k]: v });
+  const breakeven = value ? Math.max(1, Math.ceil(price / value)) : 0;
   return (
     <section className="card roi">
-      <div className="card-head"><h2>The ROI math</h2><span className="muted small">Per provider, 50 working weeks</span></div>
-      <div className="roi-grid">
-        <div className="fields">
-          {field("perWeek", "Appointments per week", "")}
-          {field("rate", "No-show + late cancel rate", "%")}
-          {field("value", "Revenue per appointment", "$", 5)}
-          {field("fill", "Share of gaps refilled", "%")}
-          {field("price", "Backfill subscription", "/mo", 1)}
+      <div className="roi-left">
+        <div className="eyebrow">The math</div>
+        <h2 className="display">What empty chairs cost this practice</h2>
+        <div className="sliders">
+          <Slider label="Appointments per week, per provider" value={perWeek} min={5} max={80} format={(v) => v} onChange={set("perWeek")} />
+          <Slider label="No-show + late-cancel rate" value={rate} min={2} max={40} format={(v) => `${v}%`} onChange={set("rate")} />
+          <Slider label="Revenue per appointment" value={value} min={50} max={800} step={5} format={fmt$} onChange={set("value")} />
+          <Slider label="Share of gaps refilled" value={fill} min={10} max={90} format={(v) => `${v}%`} onChange={set("fill")} />
+          <Slider label="Backfill subscription" value={price} min={99} max={799} step={10} format={(v) => `${fmt$(v)}/mo`} onChange={set("price")} />
         </div>
-        <div className="roi-out">
-          <div className="line"><span>Empty chairs per year</span><b>{Math.round(lostAppts).toLocaleString()}</b></div>
-          <div className="line bad"><span>Revenue lost to no-shows</span><b>{fmt$(lost)}</b></div>
-          <div className="line good"><span>Recovered by backfill</span><b>{fmt$(recovered)}</b></div>
-          <div className="line"><span>Annual cost</span><b>{fmt$(cost)}</b></div>
-          <div className="roi-hero">
-            <span>Return on spend</span>
-            <b>{cost ? `${(recovered / cost).toFixed(1)}x` : "—"}</b>
-            <span className="muted small">Pays for itself after {value ? Math.max(1, Math.ceil(price / value)) : "—"} refilled appointment{Math.ceil(price / value) === 1 ? "" : "s"} a month</span>
+      </div>
+      <div className="roi-right">
+        <div className="roi-hero">
+          <div>
+            <div className="eyebrow">Return on spend</div>
+            <div className="big">{cost ? (recovered / cost).toFixed(1) : "—"}<span>×</span></div>
+          </div>
+          <p>Pays for itself after <b>{breakeven} refilled appointment{breakeven === 1 ? "" : "s"}</b> a month.</p>
+        </div>
+        <div className="bars">
+          <div className="bar-row">
+            <div className="bar-label"><span>Lost to no-shows</span><b className="coral">{fmt$(lost)}</b></div>
+            <div className="track"><div className="fill coral" style={{ width: "100%" }} /></div>
+          </div>
+          <div className="bar-row">
+            <div className="bar-label"><span>Recovered by Backfill</span><b className="green">{fmt$(recovered)}</b></div>
+            <div className="track"><div className="fill lime" style={{ width: `${lost ? (recovered / lost) * 100 : 0}%` }} /></div>
+          </div>
+          <div className="bar-row">
+            <div className="bar-label"><span>Annual cost</span><b>{fmt$(cost)}</b></div>
+            <div className="track"><div className="fill ink" style={{ width: `${lost ? Math.min(100, (cost / lost) * 100) : 0}%` }} /></div>
           </div>
         </div>
+        <div className="roi-foot">{Math.round(lostAppts).toLocaleString()} empty chairs a year · 50 working weeks</div>
       </div>
     </section>
   );
@@ -278,159 +211,227 @@ function Roi({ inputs, setInputs }) {
 export default function Page() {
   const [s, dispatch] = useReducer(reducer, "dental", init);
   const [auto, setAuto] = useState(true);
+  const [typing, setTyping] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [toast, setToast] = useState(null);
+  const [today, setToday] = useState("Today");
   const [smsMode, setSmsMode] = useState("simulated");
   const [inputs, setInputs] = useState({ perWeek: 20, rate: 25, value: 325, fill: 50, price: 299 });
   const sentRef = useRef(0);
   const c = CLINICS[s.clinicKey];
 
   useEffect(() => {
+    setToday(new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }));
     fetch("/api/sms").then((r) => r.json()).then((d) => setSmsMode(d.mode)).catch(() => {});
   }, []);
 
   // After a cancellation, text the waitlist.
   useEffect(() => {
     if (s.round && !s.round.texted.length) {
-      const t = setTimeout(() => dispatch({ type: "OFFER", now: Date.now() }), 900);
+      const t = setTimeout(() => dispatch({ type: "OFFER", now: Date.now() }), 1100);
       return () => clearTimeout(t);
     }
   }, [s.round]);
 
-  // Autopilot: the featured patient claims the slot a few seconds later.
+  // Round timer.
+  const startedAt = s.round?.startedAt;
+  useEffect(() => {
+    if (!startedAt) return;
+    const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    tick();
+    const t = setInterval(tick, 250);
+    return () => clearInterval(t);
+  }, [startedAt]);
+
+  // Autopilot: patient starts typing, then claims.
   const pending = s.round && s.waitlist.find((w) => w.id === s.phoneId && w.status === "texted");
   useEffect(() => {
-    if (auto && pending) {
-      const t = setTimeout(() => dispatch({ type: "REPLY", memberId: pending.id, yes: true, now: Date.now() }), 3200);
-      return () => clearTimeout(t);
-    }
+    if (!(auto && pending)) return;
+    const t1 = setTimeout(() => setTyping(true), 1400);
+    const t2 = setTimeout(() => {
+      setTyping(false);
+      dispatch({ type: "REPLY", memberId: pending.id, yes: true, now: Date.now() });
+    }, 3400);
+    return () => { clearTimeout(t1); clearTimeout(t2); setTyping(false); };
   }, [auto, pending?.id, pending?.status]);
+
+  // Toast on each refill.
+  const lastLog = s.log[0]?.text;
+  useEffect(() => {
+    if (!s.refills) return;
+    setToast(lastLog);
+    const t = setTimeout(() => setToast(null), 3600);
+    return () => clearTimeout(t);
+  }, [s.refills]);
 
   // Mirror the featured patient's outbound texts to a real phone when Twilio is configured.
   useEffect(() => {
     const fresh = s.messages.slice(sentRef.current);
     sentRef.current = s.messages.length;
     if (smsMode !== "live") return;
-    fresh.filter((m) => m.dir === "out" && m.memberId === s.phoneId).forEach((m) =>
-      fetch("/api/sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: m.text }) })
-    );
+    fresh.filter((m) => m.dir === "out" && m.memberId === s.phoneId).forEach((m) => {
+      fetch("/api/sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: m.text }) });
+    });
   }, [s.messages, s.phoneId, smsMode]);
 
   const switchClinic = (key) => {
     sentRef.current = 0;
+    setToast(null);
     dispatch({ type: "RESET", clinicKey: key });
     setInputs((i) => ({ ...i, value: CLINICS[key].value }));
   };
   const cancel = (slotId) => dispatch({ type: "CANCEL", slotId, value: inputs.value, now: Date.now() });
+  const reply = (memberId, yes) => dispatch({ type: "REPLY", memberId, yes, now: Date.now() });
+
   const nextBooked = s.slots.find((x) => x.status === "booked");
   const phoneMember = s.waitlist.find((w) => w.id === s.phoneId);
   const avgFill = s.fillTimes.length ? Math.round(s.fillTimes.reduce((a, b) => a + b, 0) / s.fillTimes.length) : null;
-  const annualLoss = inputs.perWeek * (inputs.rate / 100) * 50 * inputs.value;
+  const textsSent = s.messages.filter((m) => m.dir === "out").length;
+  const series = [0, ...s.fillTimes.map((_, i) => (i + 1) * inputs.value)];
 
   return (
     <main>
-      <header className="top">
+      <nav className="nav">
         <div className="brand">
-          <div className="logo">B</div>
-          <div>
-            <div className="brand-name">Backfill</div>
-            <div className="muted small">{c.name} · Today</div>
-          </div>
+          <svg className="mark" viewBox="0 0 32 32" aria-hidden>
+            <rect width="32" height="32" rx="9" fill="var(--lime)" />
+            <path d="M9.5 17.5a6.5 6.5 0 1 0 2-4.7M9.5 9.5v3.8h3.8" fill="none" stroke="#0c1f12" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="16" cy="17.5" r="2" fill="#0c1f12" />
+          </svg>
+          <span className="wordmark">Backfill</span>
         </div>
-        <div className="seg">
+        <div className="seg" role="tablist">
           {Object.entries(CLINICS).map(([k, v]) => (
-            <button key={k} className={k === s.clinicKey ? "on" : ""} onClick={() => switchClinic(k)}>{v.label}</button>
+            <button key={k} role="tab" aria-selected={k === s.clinicKey} className={k === s.clinicKey ? "on" : ""} onClick={() => switchClinic(k)}>{v.label}</button>
           ))}
         </div>
-        <span className={`badge ${smsMode}`}>SMS: {smsMode === "live" ? "live to demo phone" : "simulated"}</span>
-      </header>
+        <div className={`sms ${smsMode}`}><span className="dot" />{smsMode === "live" ? "Live SMS" : "Simulated SMS"}</div>
+      </nav>
 
-      <section className="stats">
-        <div className="stat hero">
-          <span>Recovered today</span>
-          <b key={s.refills} className={s.refills ? "pop" : ""}><Ticker value={s.recovered} /></b>
+      <section className="hero">
+        <div className="hero-main">
+          <div className="hero-meta">{c.name} · {today}</div>
+          <div className="hero-label">Recovered today</div>
+          <div className="hero-figure">
+            <span className="money"><Ticker value={s.recovered} /></span>
+            {s.refills > 0 && <span key={s.refills} className="plus">+{fmt$(inputs.value)}</span>}
+          </div>
+          <Sparkline points={series} />
         </div>
-        <div className="stat"><span>Chairs refilled</span><b>{s.refills}</b></div>
-        <div className="stat"><span>Avg time to refill</span><b>{avgFill ? `${avgFill}s` : "—"}</b></div>
-        <div className="stat"><span>Lost to no-shows per year</span><b className="red">{fmt$(annualLoss)}</b></div>
+        <div className="hero-side">
+          <div className="kpis">
+            <div className="kpi"><span>Chairs refilled</span><b>{s.refills}<small>/{s.slots.length}</small></b></div>
+            <div className="kpi"><span>Avg time to refill</span><b>{avgFill ? `${avgFill}s` : "—"}</b></div>
+            <div className="kpi"><span>Texts sent</span><b>{textsSent}</b></div>
+          </div>
+          <div className="actions">
+            <button className="cta" disabled={!!s.round || !nextBooked} onClick={() => cancel(nextBooked.id)}>
+              <Icon name="bolt" />
+              {s.round ? "Refilling…" : nextBooked ? "Simulate a cancellation" : "Schedule fully used"}
+            </button>
+            <div className="action-row">
+              <label className="switch">
+                <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+                <span className="knob" />
+                Autopilot replies
+              </label>
+              <button className="ghost" onClick={() => switchClinic(s.clinicKey)}><Icon name="reset" size={14} />Reset</button>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <div className="controls">
-        <button className="btn primary big" disabled={!!s.round || !nextBooked} onClick={() => cancel(nextBooked.id)}>
-          {s.round ? "Refilling slot..." : nextBooked ? "Simulate a cancellation" : "All slots used"}
-        </button>
-        <label className="toggle">
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-          Autopilot patient reply
-        </label>
-        <button className="btn ghost" onClick={() => switchClinic(s.clinicKey)}>Reset demo</button>
-      </div>
+      <Pipeline s={s} elapsed={elapsed} />
 
       <div className="grid">
         <section className="card">
-          <div className="card-head"><h2>Today's schedule</h2><span className="muted small">{c.label}</span></div>
-          <ul className="slots">
-            {s.slots.map((x) => (
-              <li key={x.id} className={`slot ${x.status}`}>
-                <div className="time">{x.time}<span>{x.room}</span></div>
-                <div className="who">
-                  <div className="pname">{x.status === "open" || x.status === "texting" ? "Open chair" : x.patient}</div>
-                  <div className="muted small">
-                    {x.service}
-                    {x.cancelled && x.status === "filled" && <> · backfilled for {x.cancelled}</>}
-                    {x.cancelled && x.status !== "filled" && <> · {x.cancelled} cancelled</>}
+          <header className="card-head">
+            <h2>Today's schedule</h2>
+            <span className="legend"><i className="lg-booked" />Booked <i className="lg-open" />Open <i className="lg-filled" />Refilled</span>
+          </header>
+          <ol className="timeline">
+            {s.slots.map((x) => {
+              const open = x.status === "open" || x.status === "texting";
+              return (
+                <li key={x.id} className={`appt ${x.status}`}>
+                  <div className="appt-time">{x.time.replace(" ", " ")}</div>
+                  <div className="appt-rail"><span /></div>
+                  <div className="appt-card">
+                    <div className={`av ${open ? "ghost" : ""}`}>{open ? <Icon name="chair" size={14} /> : initials(x.patient)}</div>
+                    <div className="appt-body">
+                      <div className="appt-name">{open ? "Open chair" : x.patient}</div>
+                      <div className="appt-sub">
+                        {x.service} · {x.room}
+                        {x.cancelled && x.status === "filled" && <> · <em>replaced {x.cancelled}</em></>}
+                        {x.cancelled && open && <> · <em>{x.cancelled} cancelled</em></>}
+                      </div>
+                    </div>
+                    {x.status === "booked" && <button className="cancel" disabled={!!s.round} onClick={() => cancel(x.id)}>Cancel</button>}
+                    {x.status === "open" && <span className="tag coral">Cancelled</span>}
+                    {x.status === "texting" && <span className="tag amber"><span className="pulse" />Texting</span>}
+                    {x.status === "filled" && <span className="tag lime"><Icon name="check" size={12} />Refilled</span>}
                   </div>
-                </div>
-                <div className="state">
-                  {x.status === "booked" && <button className="link" disabled={!!s.round} onClick={() => cancel(x.id)}>Cancel</button>}
-                  {x.status === "open" && <span className="pill red">Cancelled</span>}
-                  {x.status === "texting" && <span className="pill amber">Texting waitlist</span>}
-                  {x.status === "filled" && <span className="pill green">Refilled</span>}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </li>
+              );
+            })}
+          </ol>
         </section>
 
-        <section className="card">
-          <div className="card-head"><h2>Short-notice waitlist</h2><span className="muted small">{s.waitlist.filter((w) => w.status === "waiting").length} ready</span></div>
-          <ul className="wait">
-            {s.waitlist.map((w) => (
-              <li key={w.id} className={w.id === s.phoneId ? "featured" : ""}>
-                <div>
-                  <div className="pname">{w.name}</div>
-                  <div className="muted small">{w.note}</div>
-                </div>
-                <span className={`pill ${{ waiting: "", texted: "amber", claimed: "green", declined: "grey" }[w.status]}`}>
-                  {{ waiting: "Waiting", texted: "Texted", claimed: "Booked", declined: "Passed" }[w.status]}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <h3>Activity</h3>
-          <ul className="log">
-            {!s.log.length && <li className="muted small">Nothing yet.</li>}
-            {s.log.slice(0, 8).map((l) => (
-              <li key={l.id} className={l.kind || ""}>
-                <span className="muted small">{new Date(l.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>
-                {l.text}
-              </li>
-            ))}
-          </ul>
-        </section>
+        <div className="col">
+          <section className="card">
+            <header className="card-head">
+              <h2>Short-notice waitlist</h2>
+              <span className="muted">{s.waitlist.filter((w) => w.status === "waiting").length} ready</span>
+            </header>
+            <ul className="wait">
+              {s.waitlist.map((w, i) => (
+                <li key={w.id} className={`${w.id === s.phoneId && s.round ? "featured" : ""} ${w.status}`}>
+                  <span className="rank">{i + 1}</span>
+                  <div className="wait-body">
+                    <div className="wait-name">{w.name}</div>
+                    <div className="wait-sub">{w.note}</div>
+                    <div className="match" title="Match score: availability, distance, urgency"><div style={{ width: `${w.match}%` }} /></div>
+                  </div>
+                  <div className="wait-right">
+                    <span className="score">{w.match}<small>%</small></span>
+                    <span className={`tag ${{ waiting: "", texted: "amber", claimed: "lime", declined: "muted" }[w.status]}`}>
+                      {{ waiting: "Ready", texted: "Texted", claimed: "Booked", declined: "Passed" }[w.status]}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
 
-        <section className="phone-col">
-          <Phone
-            member={phoneMember}
-            messages={s.messages.filter((m) => m.memberId === s.phoneId)}
-            onReply={(memberId, yes) => dispatch({ type: "REPLY", memberId, yes, now: Date.now() })}
-          />
-        </section>
+          <section className="card">
+            <header className="card-head"><h2>Activity</h2><span className="muted live"><span className="dot" />Live</span></header>
+            <ul className="feed">
+              {!s.log.length && <li className="muted">Quiet so far. Cancel an appointment to start.</li>}
+              {s.log.slice(0, 6).map((l) => (
+                <li key={l.id} className={l.kind || ""}>
+                  <span className="feed-dot" />
+                  <div><div className="feed-text">{l.text}</div><div className="feed-time">{clock(l.t)}</div></div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+
+        <aside className="phone-col">
+          <Phone clinic={c} member={phoneMember} typing={typing}
+            messages={s.messages.filter((m) => m.memberId === s.phoneId)} onReply={reply} />
+        </aside>
       </div>
 
       <Roi inputs={inputs} setInputs={setInputs} />
 
-      <footer className="muted small">
-        Demo data only. Default math: 20 appts/week, 25% no-show, $325 per visit. Small dental practices typically lose $52K–$118K a year at 20–30% no-show rates.
+      <footer className="foot">
+        Demo data. Defaults: 20 appointments a week, 25% no-show and late-cancel rate, $325 per visit.
       </footer>
+
+      <div className={`toast ${toast ? "show" : ""}`} role="status">
+        <span className="toast-icon"><Icon name="check" size={14} /></span>{toast}
+      </div>
     </main>
   );
 }
